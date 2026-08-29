@@ -1,0 +1,6 @@
+LiveCore is an educational observer for the public Bilibili live danmaku protocol.
+
+It does not ship credentials handling, danmaku sending, like/share automation,
+captcha bypass, or multi-account farming. The default OutboundAdapter is a
+local simulator. You are responsible for complying with Bilibili's terms of
+service if you replace that adapter.

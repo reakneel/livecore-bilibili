@@ -1,0 +1,24 @@
+[project]
+name = "livecore-bilibili"
+version = "0.1.0"
+description = "Modular Bilibili live-room intelligence framework (observe, parse, suggest)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "LiveCore contributors" }]
+keywords = ["bilibili", "live", "danmaku", "websocket"]
+dependencies = ["websockets>=12.0"]
+
+[project.optional-dependencies]
+demo = ["aiohttp>=3.9"]
+ai = ["httpx>=0.27"]
+
+[project.urls]
+Homepage = "https://github.com/reakneel/livecore-bilibili"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["livecore*"]
