@@ -18,14 +18,9 @@ __all__ = ["RoomSupervisor"]
 class RoomSupervisor:
     """Owns one isolated engine and reconnect watcher per room."""
 
-    def __init__(
-        self,
-        rooms: Iterable[int] = (),
-        config: EngineConfig | None = None,
-        store: SqliteStore | None = None,
-        alerter: Alerter | None = None,
-        log: RingLogger | None = None,
-    ) -> None:
+    def __init__(self, rooms: Iterable[int] = (), config: EngineConfig | None = None,
+                 store: SqliteStore | None = None, alerter: Alerter | None = None,
+                 log: RingLogger | None = None) -> None:
         self.config = config or EngineConfig()
         self.log = log or RingLogger()
         self.store = store
@@ -36,7 +31,12 @@ class RoomSupervisor:
         for room_id in rooms:
             self.add_room(room_id)
 
-    def _watch_for(self, room_id: int) -> ReconnectWatch:
+    @property
+    def watch(self):
+        """Backward-compatible accessor; use watch_for(room_id) for multi-room code."""
+        return next(iter(self._watches.values()), None)
+
+    def watch_for(self, room_id: int) -> ReconnectWatch:
         watch = self._watches.get(room_id)
         if watch is None:
             watch = ReconnectWatch(self.alerter, self.alerter.config.failure_threshold, key=f"reconnect:{room_id}")
@@ -51,12 +51,11 @@ class RoomSupervisor:
         if self.store is not None:
             restore_context(self.store, room_id, engine.ctx)
             engine.attach_store(self.store)
-        self._watch_for(room_id)
+        self.watch_for(room_id)
         self._engines[room_id] = engine
         return engine
 
     def remove_room(self, room_id: int) -> None:
-        """Detach a room after its engine has been stopped."""
         self._engines.pop(room_id, None)
         self._watches.pop(room_id, None)
 
@@ -73,7 +72,7 @@ class RoomSupervisor:
 
     def _state_handler(self, room_id: int):
         async def on_state(state: str) -> None:
-            watch = self._watch_for(room_id)
+            watch = self.watch_for(room_id)
             if state == "live":
                 watch.record_success()
             elif state in {"reconnecting", "error"}:
@@ -89,29 +88,40 @@ class RoomSupervisor:
             await engine.start_bilibili(room_id)
         except Exception as exc:
             self.log.push("error", "net", f"房间 {room_id} 启动失败：{exc}")
-            await self._watch_for(room_id).record_failure(f"房间 {room_id} 启动失败：{exc}")
+            await self.watch_for(room_id).record_failure(f"房间 {room_id} 启动失败：{exc}")
 
     async def stop_all(self) -> None:
-        for task in list(self._reload_tasks):
+        tasks = list(self._reload_tasks)
+        for task in tasks:
             task.cancel()
-        if self._reload_tasks:
-            await asyncio.gather(*self._reload_tasks, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         await asyncio.gather(*(engine.stop() for engine in self._engines.values()), return_exceptions=True)
+        if self.store is not None:
+            self.store.close()
         self._reload_tasks.clear()
 
     def bind_config(self, store: ConfigStore) -> None:
         store.on_reload(lambda old, new: self._apply_reload(store, old, new))
 
     def _apply_reload(self, store: ConfigStore, old: dict, new: dict) -> None:
-        """Reconcile rooms/config without blocking the ConfigStore caller."""
         self.log.push("info", "infra", "检测到配置变更，热更新生效")
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
+            self._apply_reload_sync(store)
             return
-        task = loop.create_task(self._reconcile_reload(store))
+        task = asyncio.create_task(self._reconcile_reload(store))
         self._reload_tasks.add(task)
         task.add_done_callback(self._reload_tasks.discard)
+
+    def _apply_reload_sync(self, store: ConfigStore) -> None:
+        desired = set(store.rooms())
+        for room_id in sorted(desired - set(self._engines)):
+            self.add_room(room_id, store.engine_config())
+        for room_id in sorted(set(self._engines) - desired):
+            self.remove_room(room_id)
+        self._apply_live_config(store)
 
     async def _reconcile_reload(self, store: ConfigStore) -> None:
         desired = set(store.rooms())
@@ -124,17 +134,25 @@ class RoomSupervisor:
             if engine is not None:
                 await engine.stop()
             self.remove_room(room_id)
+        self._apply_live_config(store)
 
+    def _apply_live_config(self, store: ConfigStore) -> None:
         fresh = store.engine_config()
         self.config = fresh
         for engine in self._engines.values():
             engine.config = fresh
-
         self.alerter.config = store.alert_config()
-        if self.store is not None and store.storage_config().enabled is False:
-            self.store.close()
-            self.store = None
-        elif self.store is None and store.storage_config().enabled:
-            self.store = SqliteStore(store.storage_config().path)
+
+        storage = store.storage_config()
+        if not storage.enabled:
+            if self.store is not None:
+                self.store.close()
+                self.store = None
+        elif self.store is None or self.store.path != storage.path:
+            if self.store is not None:
+                self.store.close()
+            self.store = SqliteStore(storage.path)
+            for room_id, engine in self._engines.items():
+                restore_context(self.store, room_id, engine.ctx)
         for engine in self._engines.values():
             engine.attach_store(self.store)
