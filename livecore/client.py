@@ -1,4 +1,4 @@
-"""WebSocket client: auth, 25s heartbeat, exponential backoff reconnect."""
+"""WebSocket client: auth, heartbeat, bounded reconnect backoff and clean cancellation."""
 
 from __future__ import annotations
 
@@ -40,13 +40,15 @@ class BiliLiveClient:
 
     async def stop(self) -> None:
         self._stop.set()
-        if self._task:
-            self._task.cancel()
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
             try:
-                await self._task
-            except (asyncio.CancelledError, Exception):
+                await task
+            except asyncio.CancelledError:
                 pass
-            self._task = None
+            except Exception as exc:
+                self.log.push("warn", "net", f"停止连接时异常：{exc}")
         await self._emit_state("offline")
 
     async def _run(self, endpoint: DanmuEndpoint) -> None:
@@ -60,11 +62,11 @@ class BiliLiveClient:
             await self._emit_state("reconnecting" if attempt else "connecting")
             self.log.push("info", "net", f"连接 {url} 房间 {endpoint.room_id}")
             try:
-                async with websockets.connect(url, max_size=2_000_000) as ws:
+                async with websockets.connect(url, max_size=2_000_000, open_timeout=10) as ws:
                     await self._emit_state("authenticating")
                     await ws.send(proto.encode_auth(endpoint.room_id, endpoint.token))
                     attempt = 0
-                    hb = asyncio.create_task(self._heartbeat(ws))
+                    hb = asyncio.create_task(self._heartbeat(ws), name="bili-heartbeat")
                     try:
                         async for raw in ws:
                             if self._stop.is_set():
@@ -74,9 +76,14 @@ class BiliLiveClient:
                             await self._handle_frame(endpoint.room_id, raw)
                     finally:
                         hb.cancel()
+                        try:
+                            await hb
+                        except asyncio.CancelledError:
+                            pass
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                await self._emit_state("error")
                 self.log.push("warn", "net", f"套接字异常：{exc}")
             if self._stop.is_set():
                 return
@@ -102,15 +109,8 @@ class BiliLiveClient:
                 self.log.push("info", "net", "认证成功，开始心跳")
             elif pkt.op == proto.OP_HEARTBEAT_REPLY:
                 pop = proto.read_popularity(pkt.body)
-                ev = LiveEvent(
-                    id="pop",
-                    ts=0,
-                    kind="popularity",
-                    room_id=room_id,
-                    popularity=pop,
-                    text=f"人气 {pop}",
-                    raw_cmd="HEARTBEAT_REPLY",
-                )
+                ev = LiveEvent(id="pop", ts=0, kind="popularity", room_id=room_id,
+                               popularity=pop, text=f"人气 {pop}", raw_cmd="HEARTBEAT_REPLY")
                 await self._emit_event(ev)
             elif pkt.op == proto.OP_NOTIFY:
                 payload = proto.parse_json_body(pkt.body)
