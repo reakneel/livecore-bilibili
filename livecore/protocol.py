@@ -9,18 +9,16 @@ from dataclasses import dataclass
 
 try:
     import brotli
-except ImportError:  # pragma: no cover - exercised by dependency installation
+except ImportError:  # pragma: no cover
     brotli = None
 
 HEADER = struct.Struct(">IHHII")
 HEADER_SIZE = 16
-
 OP_HEARTBEAT = 2
 OP_HEARTBEAT_REPLY = 3
 OP_NOTIFY = 5
 OP_AUTH = 7
 OP_AUTH_REPLY = 8
-
 PROTO_RAW = 0
 PROTO_INT = 1
 PROTO_ZLIB = 2
@@ -39,14 +37,7 @@ def encode_packet(op: int, body: bytes, protover: int = PROTO_INT) -> bytes:
 
 
 def encode_auth(room_id: int, token: str, uid: int = 0) -> bytes:
-    payload = {
-        "uid": uid,
-        "roomid": room_id,
-        "protover": PROTO_ZLIB,
-        "platform": "web",
-        "type": 2,
-        "key": token,
-    }
+    payload = {"uid": uid, "roomid": room_id, "protover": PROTO_ZLIB, "platform": "web", "type": 2, "key": token}
     return encode_packet(OP_AUTH, json.dumps(payload).encode("utf-8"), PROTO_RAW)
 
 
@@ -63,8 +54,7 @@ def decode_packets(buf: bytes) -> list[Packet]:
             raise ValueError("invalid Bilibili packet header")
         if offset + packet_len > len(buf):
             raise ValueError("truncated Bilibili packet")
-        body = buf[offset + header_len : offset + packet_len]
-        packets.append(Packet(op=op, protover=protover, body=body))
+        packets.append(Packet(op=op, protover=protover, body=buf[offset + header_len:offset + packet_len]))
         offset += packet_len
     if offset != len(buf):
         raise ValueError("trailing bytes do not form a complete Bilibili packet")
@@ -76,16 +66,14 @@ def expand_packets(buf: bytes) -> list[Packet]:
     for pkt in decode_packets(buf):
         if pkt.protover == PROTO_ZLIB and pkt.body:
             try:
-                out.extend(expand_packets(zlib.decompress(pkt.body)))
-                continue
+                out.extend(expand_packets(zlib.decompress(pkt.body))); continue
             except zlib.error:
                 pass
         elif pkt.protover == PROTO_BROTLI and pkt.body:
             if brotli is None:
                 raise RuntimeError("Brotli support requires the 'brotli' package")
             try:
-                out.extend(expand_packets(brotli.decompress(pkt.body)))
-                continue
+                out.extend(expand_packets(brotli.decompress(pkt.body))); continue
             except brotli.error:
                 pass
         out.append(pkt)
@@ -93,16 +81,12 @@ def expand_packets(buf: bytes) -> list[Packet]:
 
 
 def read_popularity(body: bytes) -> int:
-    if len(body) < 4:
-        return 0
+    if len(body) < 4: return 0
     return struct.unpack(">I", body[:4])[0]
 
 
 def parse_json_body(body: bytes):
     text = body.decode("utf-8", errors="replace").strip()
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return text
+    if not text: return None
+    try: return json.loads(text)
+    except json.JSONDecodeError: return text

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Callable, Literal
 
 Level = Literal["debug", "info", "warn", "error"]
-Layer = Literal["infra", "net", "msg", "ai", "behavior"]
+Layer = Literal["infra", "net", "msg", "ai", "behavior", "watch"]
 
 
 @dataclass(slots=True)
