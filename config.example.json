@@ -1,0 +1,42 @@
+{
+  "rooms": [21452505],
+
+  "engine": {
+    "persona": "你是直播间里的热心观众，说话短、口语化、真诚，不超过 24 字。",
+    "reply_max_len": 24,
+    "auto_suggest": true,
+    "cold_start_sec": 60,
+    "cold_start_jitter_sec": 60,
+    "check_in_min": 5,
+    "min_gap_sec": 12,
+    "activity_boost": true,
+    "jitter_ms": 1200,
+    "gaussian_jitter": true,
+    "jitter_sigma_ratio": 0.35,
+    "typing_ms_per_char": 45,
+    "typing_min_sec": 0.6,
+    "typing_max_sec": 3.5,
+    "watch_actions": true,
+    "like_every_sec": 150,
+    "share_every_sec": 900
+  },
+
+  "alert": {
+    "enabled": false,
+    "failure_threshold": 3,
+    "cooldown_sec": 300,
+    "channel": "log",
+    "webhook_url": "",
+    "email_to": ""
+  },
+
+  "storage": {
+    "enabled": false,
+    "path": "livecore.db",
+    "retention_days": 7
+  },
+
+  "ai": {
+    "provider": "none"
+  }
+}
