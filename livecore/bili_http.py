@@ -51,7 +51,7 @@ async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None
     import aiohttp
 
     cfg = config or HttpConfig()
-    timeout = aiohttp.ClientTimeout(total=cfg.total_timeout_sec, connect_timeout=cfg.connect_timeout_sec)
+    timeout = aiohttp.ClientTimeout(total=cfg.total_timeout_sec, connect=cfg.connect_timeout_sec)
     headers = {"User-Agent": UA, "Referer": "https://live.bilibili.com/"}
     url = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo"
     info_url = "https://api.live.bilibili.com/room/v1/Room/get_info"
