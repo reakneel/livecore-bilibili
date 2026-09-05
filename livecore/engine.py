@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from .adapters import AiAdapter, NoopAiAdapter, OutboundAdapter, SimulatorAdapter
 from .behavior import WatchSimulator
+from .bili_http import fetch_danmu_endpoint
 from .client import BiliLiveClient
 from .context import RoomContext
 from .dispatcher import EventDispatcher
@@ -34,19 +35,25 @@ class LiveEngine:
         self.dispatcher = EventDispatcher()
         self.client = BiliLiveClient(self.log)
         self.suggestions: list[Suggestion] = []
+        self.room_id = 0
         self._event_handlers: list[Callable[[LiveEvent], None]] = []
         self._watch_handlers: list[Callable[[WatchAction], None]] = []
         self._running = False
         self._sched_task: asyncio.Task[None] | None = None
+        self._persist_tasks: set[asyncio.Task[None]] = set()
+        self._store = None
         self.client.on_event(self._ingest)
+
+    def attach_store(self, store) -> None:
+        """Attach an optional SqliteStore; persistence is always scheduled off-loop."""
+        self._store = store
 
     def on_event(self, fn: Callable[[LiveEvent], None]) -> None:
         self._event_handlers.append(fn)
 
     async def start_bilibili(self, room_id: int) -> None:
-        from .bili_http import fetch_danmu_endpoint
-
         self._running = True
+        self.room_id = room_id
         self.scheduler.reset(self.config)
         self.watch.reset()
         endpoint = await fetch_danmu_endpoint(room_id)
@@ -58,8 +65,24 @@ class LiveEngine:
         self._running = False
         if self._sched_task:
             self._sched_task.cancel()
+            try:
+                await self._sched_task
+            except asyncio.CancelledError:
+                pass
             self._sched_task = None
         await self.client.stop()
+        if self._persist_tasks:
+            await asyncio.gather(*self._persist_tasks, return_exceptions=True)
+
+    def _track(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._persist_tasks.add(task)
+        task.add_done_callback(self._persist_tasks.discard)
+        task.add_done_callback(self._persist_done)
+
+    def _persist_done(self, task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            self.log.push("warn", "infra", f"持久化任务失败：{task.exception()}")
 
     async def accept(self, suggestion_id: str) -> None:
         for s in self.suggestions:
@@ -67,6 +90,8 @@ class LiveEngine:
                 s.status = "accepted"
                 self.ctx.push_reply(s)
                 self.scheduler.mark_emit()
+                if self._store is not None:
+                    self._track(self._store.save_suggestion_async(s, self.room_id))
                 await self.outbound.publish(s)
                 self.log.push("info", "behavior", f"采纳建议：{s.text}")
                 return
@@ -75,6 +100,8 @@ class LiveEngine:
         if ev.kind == "popularity":
             return None
         self.ctx.push_event(ev)
+        if self._store is not None:
+            self._track(self._store.save_event_async(ev))
         self.dispatcher.emit(ev)
         for fn in self._event_handlers:
             fn(ev)
@@ -90,12 +117,11 @@ class LiveEngine:
         return None
 
     async def _delayed_enqueue(self, text: str, source: str, reason: str, reply_to: str) -> None:
-        # 先等一个高斯分布的操作延迟，再叠加与回复长度相关的「打字」耗时
         await asyncio.sleep(self.scheduler.next_delay(self.config))
         await asyncio.sleep(self.scheduler.typing_delay(text, self.config))
         if not self._running or not self.scheduler.gap_ok(self.config):
             return
-        self._enqueue(text, source, reason, reply_to)  # type: ignore[arg-type]
+        self._enqueue(text, source, reason, reply_to)
 
     def _enqueue(self, raw: str, source: str, reason: str, reply_to: str = "") -> None:
         text = postprocess_reply(raw, self.config.reply_max_len)
@@ -106,15 +132,16 @@ class LiveEngine:
             ts=time.time(),
             text=text,
             reason=reason,
-            source=source,  # type: ignore[arg-type]
+            source=source,
             in_reply_to=reply_to,
         )
         self.suggestions.append(item)
+        if self._store is not None:
+            self._track(self._store.save_suggestion_async(item, self.room_id))
         self.scheduler.mark_emit()
         self.log.push("info", "behavior", f"建议「{text}」· {reason}")
 
     def on_watch_action(self, fn: Callable[[WatchAction], None]) -> None:
-        """Subscribe to like/share/stay actions. Nothing is sent to Bilibili by default."""
         self._watch_handlers.append(fn)
 
     async def _scheduler_loop(self) -> None:
@@ -130,4 +157,4 @@ class LiveEngine:
             text, source, reason = action
             if self.ctx.already_said(text):
                 continue
-            self._enqueue(text, source, reason)  # type: ignore[arg-type]
+            self._enqueue(text, source, reason)
