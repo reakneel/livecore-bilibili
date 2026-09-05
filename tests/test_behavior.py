@@ -6,20 +6,8 @@ import time
 
 import pytest
 
-from livecore.behavior import (
-    BUSY_APM,
-    BUSY_SCALE,
-    QUIET_SCALE,
-    WatchSimulator,
-    activity_scale,
-    cold_start_target,
-    gaussian_jitter_sec,
-    typing_delay_sec,
-)
+from livecore.behavior import BUSY_APM, BUSY_SCALE, QUIET_SCALE, WatchSimulator, activity_scale, cold_start_target, gaussian_jitter_sec, typing_delay_sec
 from livecore.types import EngineConfig
-
-
-# ---------------------------------------------------------------- gaussian jitter
 
 
 def test_gaussian_jitter_is_zero_when_disabled_at_zero():
@@ -39,7 +27,6 @@ def test_gaussian_jitter_samples_cluster_around_mean():
     cfg = EngineConfig(jitter_ms=1200, gaussian_jitter=True)
     samples = [gaussian_jitter_sec(cfg) for _ in range(400)]
     mean = sum(samples) / len(samples)
-    # 均值应落在 jitter_ms 附近（±15%）
     assert 1.02 <= mean <= 1.38
 
 
@@ -48,9 +35,6 @@ def test_legacy_triangular_jitter_still_available():
     for _ in range(100):
         d = gaussian_jitter_sec(cfg)
         assert 0 <= d <= 1200 * 1.8 / 1000 + 1e-9
-
-
-# ---------------------------------------------------------------- typing cadence
 
 
 def test_typing_delay_respects_min_bound():
@@ -78,9 +62,6 @@ def test_typing_delay_zero_when_disabled():
     assert typing_delay_sec("", EngineConfig()) == 0.0
 
 
-# ---------------------------------------------------------------- activity scale
-
-
 def test_activity_scale_quiet_room_stretches_intervals():
     assert activity_scale(0) == QUIET_SCALE
 
@@ -101,9 +82,6 @@ def test_activity_scale_disabled_is_neutral():
     assert activity_scale(999, enabled=False) == 1.0
 
 
-# ---------------------------------------------------------------- cold start
-
-
 def test_cold_start_target_within_jitter_window():
     cfg = EngineConfig(cold_start_sec=12, cold_start_jitter_sec=8)
     for _ in range(100):
@@ -113,9 +91,6 @@ def test_cold_start_target_within_jitter_window():
 def test_cold_start_target_fixed_without_jitter():
     cfg = EngineConfig(cold_start_sec=30, cold_start_jitter_sec=0)
     assert cold_start_target(cfg) == 30
-
-
-# ---------------------------------------------------------------- watch simulator
 
 
 def test_watch_simulator_emits_like_once_interval_elapsed():
@@ -132,14 +107,11 @@ def test_watch_simulator_quiet_room_waits_longer():
     loud.started_at = time.time() - 10_000
     quiet = WatchSimulator()
     quiet.started_at = time.time() - 10_000
-    cfg = EngineConfig(like_every_sec=150, share_every_sec=100_000)
-    # 刚启动时（prev is None）用 started_at 计，两者都应触发；重置后再比较
+    cfg = EngineConfig(watch_actions=True, like_every_sec=150, share_every_sec=100_000)
     assert loud.poll(cfg, scale=1.8) and quiet.poll(cfg, scale=0.5)
-
     loud_now, quiet_now = time.time(), time.time()
     loud.last["like"] = loud_now
     quiet.last["like"] = quiet_now
-    # 120s 后：热闹房间（150/1.8≈83s）已到期，冷清房间（150/0.5=300s）未到期
     loud.last["like"] -= 120
     quiet.last["like"] -= 120
     assert [a.kind for a in loud.poll(cfg, scale=1.8)] == ["like"]
@@ -155,7 +127,7 @@ def test_watch_simulator_respects_disabled_flag():
 def test_watch_simulator_records_history_and_resets():
     sim = WatchSimulator()
     sim.started_at = time.time() - 10_000
-    sim.poll(EngineConfig(share_every_sec=100_000), scale=1.0)
+    sim.poll(EngineConfig(watch_actions=True, share_every_sec=100_000), scale=1.0)
     assert len(sim.history) == 1
     sim.reset()
     assert sim.history == []
