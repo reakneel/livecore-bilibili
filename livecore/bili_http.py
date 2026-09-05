@@ -43,10 +43,7 @@ async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None
     import aiohttp
 
     cfg = config or HttpConfig()
-    timeout = aiohttp.ClientTimeout(
-        total=cfg.total_timeout_sec,
-        connect=cfg.connect_timeout_sec,
-    )
+    timeout = aiohttp.ClientTimeout(total=cfg.total_timeout_sec, connect=cfg.connect_timeout_sec)
     headers = {"User-Agent": UA, "Referer": "https://live.bilibili.com/"}
     url = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo"
     info_url = "https://api.live.bilibili.com/room/v1/Room/get_info"
@@ -56,12 +53,16 @@ async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None
             resp.raise_for_status()
             data = _require_data(await resp.json(), "getDanmuInfo")
 
+        token = str(data.get("token") or "")
+        if not token:
+            raise BiliHttpError("getDanmuInfo: empty token")
+
         hosts = data.get("host_list")
         usable = [h for h in hosts if isinstance(h, dict) and h.get("host")] if isinstance(hosts, list) else []
         host = usable[0] if usable else {"host": DEFAULT_HOST, "wss_port": 443}
 
-        # Short-room resolution is useful but not allowed to make a healthy
-        # danmu handshake fail because the metadata endpoint is transient.
+        # Short-room resolution is useful but must not make a valid handshake
+        # fail because the metadata endpoint is transient.
         real_id = room_id
         try:
             async with session.get(info_url, params={"room_id": room_id}) as resp:
@@ -70,10 +71,6 @@ async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None
                 real_id = int(info_data.get("room_id") or room_id)
         except (aiohttp.ClientError, BiliHttpError, ValueError, TypeError):
             pass
-
-    token = str(data.get("token") or "")
-    if not token:
-        raise BiliHttpError("getDanmuInfo: empty token")
 
     return DanmuEndpoint(
         host=str(host.get("host") or DEFAULT_HOST),

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from livecore.bili_http import BiliHttpError, HttpConfig, fetch_danmu_endpoint
@@ -18,10 +20,6 @@ class _FakeResp:
 
     async def __aexit__(self, *args):
         return False
-
-    @property
-    def ok(self) -> bool:
-        return self._ok
 
     def raise_for_status(self) -> None:
         if not self._ok:
@@ -94,5 +92,4 @@ async def test_fetch_danmu_endpoint_rejects_empty_token(monkeypatch):
 
 def test_fetch_danmu_endpoint_rejects_invalid_room_id():
     with pytest.raises(ValueError, match="positive"):
-        import asyncio
         asyncio.run(fetch_danmu_endpoint(0))
