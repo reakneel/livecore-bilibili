@@ -19,3 +19,31 @@ AI 集成   人格 prompt · 情感标签 · 规则引擎降级
 ```
 
 阶段实现见 Pull Requests。默认出站适配器是本地模拟器，不会调用 B 站发送接口。
+
+## 模块地图
+
+| 模块 | 职责 | 阶段 |
+| --- | --- | --- |
+| `protocol.py` | B 站弹幕协议封包 / 解包、zlib 展开、人气值读取 | 1 |
+| `client.py` | WebSocket 连接、25s 心跳、指数退避 + 抖动重连 | 1 |
+| `parser.py` | 服务器通知帧 → `LiveEvent`（弹幕 / 礼物 / 上舰 / SC 等） | 1 |
+| `dispatcher.py` | 按事件类型路由到处理函数，支持通配符订阅 | 2 |
+| `context.py` | 单房间滚动上下文（最近 N 条）+ 去重窗口 | 2 |
+| `rules.py` | 关键词 / 事件规则匹配，负向情绪降级 | 2 |
+| `scheduler.py` | 冷启动、最小间隔、打卡与氛围弹幕节奏 | 2、4 |
+| `postprocess.py` | 长度截断、刷屏词拦截、表情后缀 | 2 |
+| `adapters.py` | `OutboundAdapter` / `AiAdapter` 协议与默认模拟器 | 2 |
+| `engine.py` | 编排：收流 → 上下文 → 分发 → 规则 → 后处理 → 建议队列 | 3 |
+| `bili_http.py` | 进房握手：解析 wss 地址、token、真实房间号 | 3 |
+| `behavior.py` | 高斯抖动、打字耗时、随机冷启动、活跃度调频、观看行为 | 4 |
+| `config.py` | JSON 配置外置 + mtime 热更新 | 5 |
+| `alert.py` | 连续失败计数、冷却去重、可插拔告警通道 | 5 |
+| `store.py` | SQLite 持久化事件与回复，重启后恢复上下文 | 5 |
+| `multi.py` | 多直播间监督，房间间上下文隔离 | 5 |
+
+## 安全边界
+
+- 默认出站适配器是 `SimulatorAdapter`，只在本地记录，**不发任何网络请求**。
+- `alert.py` 的 webhook / email 通道默认关闭；email 通道是占位实现，不包含 SMTP 凭据。
+- `store.py` 默认不写盘。
+- token、密钥、房间号一律放在 `config.json`（已在 `.gitignore` 中），模板见 `config.example.json`。
