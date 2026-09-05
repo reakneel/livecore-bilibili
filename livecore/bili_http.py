@@ -17,6 +17,9 @@ DEFAULT_HOST = "broadcastlv.chat.bilibili.com"
 class HttpConfig:
     total_timeout_sec: float = 10.0
     connect_timeout_sec: float = 5.0
+    # Guest mode is valid when Bilibili returns an empty token. Set this to
+    # True when the caller explicitly requires authenticated access.
+    require_token: bool = False
 
 
 class BiliHttpError(RuntimeError):
@@ -36,14 +39,19 @@ def _require_data(payload: object, endpoint: str) -> dict:
 
 
 async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None) -> DanmuEndpoint:
-    """Resolve a numeric room id into a usable danmaku WebSocket endpoint."""
+    """Resolve a numeric room id into a usable danmaku WebSocket endpoint.
+
+    Empty tokens are intentionally accepted for guest/unauthenticated mode.
+    Authentication becomes strict only when ``HttpConfig.require_token`` is
+    enabled; the WebSocket auth reply remains the final server-side check.
+    """
     if room_id <= 0:
         raise ValueError("room_id must be positive")
 
     import aiohttp
 
     cfg = config or HttpConfig()
-    timeout = aiohttp.ClientTimeout(total=cfg.total_timeout_sec, connect=cfg.connect_timeout_sec)
+    timeout = aiohttp.ClientTimeout(total=cfg.total_timeout_sec, connect_timeout=cfg.connect_timeout_sec)
     headers = {"User-Agent": UA, "Referer": "https://live.bilibili.com/"}
     url = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo"
     info_url = "https://api.live.bilibili.com/room/v1/Room/get_info"
@@ -54,8 +62,8 @@ async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None
             data = _require_data(await resp.json(), "getDanmuInfo")
 
         token = str(data.get("token") or "")
-        if not token:
-            raise BiliHttpError("getDanmuInfo: empty token")
+        if cfg.require_token and not token:
+            raise BiliHttpError("getDanmuInfo: token required for authenticated mode")
 
         hosts = data.get("host_list")
         usable = [h for h in hosts if isinstance(h, dict) and h.get("host")] if isinstance(hosts, list) else []

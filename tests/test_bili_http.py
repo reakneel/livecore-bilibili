@@ -62,6 +62,28 @@ async def test_fetch_danmu_endpoint_parses_response(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_danmu_endpoint_accepts_empty_token_for_guest(monkeypatch):
+    fake_session = _FakeSession([
+        {"code": 0, "data": {"host_list": [], "token": ""}},
+        {"code": 0, "data": {}},
+    ])
+    monkeypatch.setattr("aiohttp.ClientSession", lambda *a, **kw: fake_session)
+    ep = await fetch_danmu_endpoint(1)
+    assert ep.token == ""
+    assert ep.host == "broadcastlv.chat.bilibili.com"
+
+
+@pytest.mark.asyncio
+async def test_fetch_danmu_endpoint_requires_token_when_authenticated(monkeypatch):
+    fake_session = _FakeSession([
+        {"code": 0, "data": {"host_list": [], "token": ""}},
+    ])
+    monkeypatch.setattr("aiohttp.ClientSession", lambda *a, **kw: fake_session)
+    with pytest.raises(BiliHttpError, match="token required"):
+        await fetch_danmu_endpoint(1, config=HttpConfig(require_token=True))
+
+
+@pytest.mark.asyncio
 async def test_fetch_danmu_endpoint_falls_back_to_default_host(monkeypatch):
     fake_session = _FakeSession([
         {"code": 0, "data": {"token": "abcd"}},
@@ -79,14 +101,6 @@ async def test_fetch_danmu_endpoint_rejects_api_error(monkeypatch):
     fake_session = _FakeSession([{"code": -400, "message": "bad room", "data": None}])
     monkeypatch.setattr("aiohttp.ClientSession", lambda *a, **kw: fake_session)
     with pytest.raises(BiliHttpError, match="api code=-400"):
-        await fetch_danmu_endpoint(1)
-
-
-@pytest.mark.asyncio
-async def test_fetch_danmu_endpoint_rejects_empty_token(monkeypatch):
-    fake_session = _FakeSession([{"code": 0, "data": {"host_list": []}}])
-    monkeypatch.setattr("aiohttp.ClientSession", lambda *a, **kw: fake_session)
-    with pytest.raises(BiliHttpError, match="empty token"):
         await fetch_danmu_endpoint(1)
 
 
