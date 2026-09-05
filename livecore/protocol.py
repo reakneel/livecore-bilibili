@@ -7,6 +7,11 @@ import struct
 import zlib
 from dataclasses import dataclass
 
+try:
+    import brotli
+except ImportError:  # pragma: no cover - exercised by dependency installation
+    brotli = None
+
 HEADER = struct.Struct(">IHHII")
 HEADER_SIZE = 16
 
@@ -54,11 +59,15 @@ def decode_packets(buf: bytes) -> list[Packet]:
     offset = 0
     while offset + HEADER_SIZE <= len(buf):
         packet_len, header_len, protover, op, _seq = HEADER.unpack_from(buf, offset)
-        if packet_len < HEADER_SIZE or offset + packet_len > len(buf):
-            break
+        if header_len < HEADER_SIZE or packet_len < header_len:
+            raise ValueError("invalid Bilibili packet header")
+        if offset + packet_len > len(buf):
+            raise ValueError("truncated Bilibili packet")
         body = buf[offset + header_len : offset + packet_len]
         packets.append(Packet(op=op, protover=protover, body=body))
         offset += packet_len
+    if offset != len(buf):
+        raise ValueError("trailing bytes do not form a complete Bilibili packet")
     return packets
 
 
@@ -70,6 +79,14 @@ def expand_packets(buf: bytes) -> list[Packet]:
                 out.extend(expand_packets(zlib.decompress(pkt.body)))
                 continue
             except zlib.error:
+                pass
+        elif pkt.protover == PROTO_BROTLI and pkt.body:
+            if brotli is None:
+                raise RuntimeError("Brotli support requires the 'brotli' package")
+            try:
+                out.extend(expand_packets(brotli.decompress(pkt.body)))
+                continue
+            except brotli.error:
                 pass
         out.append(pkt)
     return out
