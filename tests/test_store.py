@@ -14,9 +14,7 @@ from livecore.types import GiftInfo, LiveEvent, LiveUser, Suggestion
 
 @pytest.fixture()
 def store(tmp_path):
-    s = SqliteStore(str(tmp_path / "livecore.db"))
-    yield s
-    s.close()
+    s = SqliteStore(str(tmp_path / "livecore.db")); yield s; s.close()
 
 
 def _event(eid: str, ts: float | None = None, kind: str = "danmaku", text: str = "你好") -> LiveEvent:
@@ -30,17 +28,14 @@ def _reply(rid: str, ts: float | None = None, text: str = "谢谢", source: str 
 
 
 def test_save_and_read_event(store):
-    store.save_event(_event("e1"))
-    rows = store.recent_events(101)
+    store.save_event(_event("e1")); rows = store.recent_events(101)
     assert len(rows) == 1 and rows[0].id == "e1"
     assert rows[0].user_name == "观众A" and rows[0].text == "你好" and rows[0].kind == "danmaku"
 
 
 def test_save_and_read_reply(store):
-    store.save_suggestion(_reply("r1"), room_id=101)
-    row = store.recent_replies(101)[0]
-    assert row.text == "谢谢" and row.source == "rule" and row.status == "accepted"
-    assert row.in_reply_to == "e1"
+    store.save_suggestion(_reply("r1"), room_id=101); row = store.recent_replies(101)[0]
+    assert row.text == "谢谢" and row.source == "rule" and row.status == "accepted" and row.in_reply_to == "e1"
 
 
 @pytest.mark.asyncio
@@ -50,8 +45,7 @@ async def test_async_writes_round_trip(store):
 
 
 def test_events_are_scoped_by_room(store):
-    store.save_event(_event("e1"))
-    store.save_event(LiveEvent(id="e2", ts=time.time(), kind="danmaku", room_id=999, text="别的房间"))
+    store.save_event(_event("e1")); store.save_event(LiveEvent(id="e2", ts=time.time(), kind="danmaku", room_id=999, text="别的房间"))
     assert len(store.recent_events(101)) == 1 and len(store.recent_events(999)) == 1
 
 
@@ -77,13 +71,10 @@ def test_gift_event_round_trip(store):
 
 
 def test_prune_removes_old_rows_only(store):
-    now = time.time()
-    store.save_event(_event("old", ts=now - 30 * 86400)); store.save_event(_event("new", ts=now))
-    store.save_suggestion(_reply("rold", ts=now - 30 * 86400), room_id=101)
-    store.save_suggestion(_reply("rnew", ts=now), room_id=101)
+    now = time.time(); store.save_event(_event("old", now - 30 * 86400)); store.save_event(_event("new", now))
+    store.save_suggestion(_reply("rold", now - 30 * 86400), room_id=101); store.save_suggestion(_reply("rnew", now), room_id=101)
     assert store.prune(retention_days=7) == 2
-    assert [r.id for r in store.recent_events(101)] == ["new"]
-    assert [r.id for r in store.recent_replies(101)] == ["rnew"]
+    assert [r.id for r in store.recent_events(101)] == ["new"] and [r.id for r in store.recent_replies(101)] == ["rnew"]
 
 
 def test_prune_keeps_everything_when_fresh(store):
@@ -91,16 +82,16 @@ def test_prune_keeps_everything_when_fresh(store):
 
 
 def test_restore_context_replays_all_reply_metadata(store):
-    now = time.time()
-    store.save_suggestion(_reply("r1", now - 10, "谢谢老板", "ai"), room_id=101)
-    ctx = RoomContext(); assert restore_context(store, 101, ctx) == 1
-    restored = ctx._replies[-1]
-    assert restored.source == "ai" and restored.status == "accepted" and restored.in_reply_to == "e1"
+    store.save_suggestion(_reply("r1", time.time() - 10, "谢谢老板", "ai"), room_id=101)
+    captured = []
+    class Capture:
+        def push_reply(self, s): captured.append(s)
+    assert restore_context(store, 101, Capture()) == 1
+    assert captured[0].source == "ai" and captured[0].status == "accepted" and captured[0].in_reply_to == "e1"
 
 
 def test_restore_context_skips_expired_replies(store):
-    now = time.time(); store.save_suggestion(_reply("old", now - 7200, "很久以前"), room_id=101)
-    store.save_suggestion(_reply("new", now, "刚刚"), room_id=101)
+    now = time.time(); store.save_suggestion(_reply("old", now - 7200, "很久以前"), room_id=101); store.save_suggestion(_reply("new", now, "刚刚"), room_id=101)
     ctx = RoomContext(); assert restore_context(store, 101, ctx, within=3600) == 1
     assert ctx.already_said("刚刚", within=3600) and not ctx.already_said("很久以前", within=3600)
 
@@ -111,8 +102,7 @@ def test_restore_context_empty_database(tmp_path):
 
 def test_context_manager_closes_connection(tmp_path):
     path = str(tmp_path / "ctx.db")
-    with SqliteStore(path) as store:
-        store.save_event(_event("e1")); assert store._conn is not None
+    with SqliteStore(path) as store: store.save_event(_event("e1")); assert store._conn is not None
     assert store._conn is None
 
 
