@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "LiveCore contributors" }]
 keywords = ["bilibili", "live", "danmaku", "websocket"]
-dependencies = ["websockets>=12.0"]
+dependencies = ["websockets>=12.0", "Brotli>=1.1"]
 
 [project.optional-dependencies]
 demo = ["aiohttp>=3.9"]
