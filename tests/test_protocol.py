@@ -1,3 +1,7 @@
+import brotli
+import pytest
+import zlib
+
 from livecore.protocol import (
     OP_AUTH,
     decode_packets,
@@ -7,7 +11,6 @@ from livecore.protocol import (
     expand_packets,
     read_popularity,
 )
-import zlib
 
 
 def test_roundtrip_auth():
@@ -31,6 +34,29 @@ def test_zlib_expand():
     wrapped = encode_packet(5, zlib.compress(inner), protover=2)
     out = expand_packets(wrapped)
     assert any(b"DANMU_MSG" in p.body for p in out)
+
+
+def test_brotli_expand_nested_packets():
+    inner_a = encode_packet(5, b'{"cmd":"DANMU_MSG"}', protover=0)
+    inner_b = encode_packet(5, b'{"cmd":"SEND_GIFT"}', protover=0)
+    wrapped = encode_packet(5, brotli.compress(inner_a + inner_b), protover=3)
+    out = expand_packets(wrapped)
+    assert len(out) == 2
+    assert b"DANMU_MSG" in out[0].body
+    assert b"SEND_GIFT" in out[1].body
+
+
+def test_decode_rejects_invalid_header_length():
+    raw = encode_packet(5, b"ok")
+    broken = raw[:4] + (8).to_bytes(2, "big") + raw[6:]
+    with pytest.raises(ValueError, match="invalid Bilibili packet header"):
+        decode_packets(broken)
+
+
+def test_decode_rejects_truncated_packet():
+    raw = encode_packet(5, b"ok")
+    with pytest.raises(ValueError, match="truncated Bilibili packet"):
+        decode_packets(raw[:-1])
 
 
 def test_popularity():
