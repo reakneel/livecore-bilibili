@@ -8,12 +8,7 @@ __version__ = "0.1.0"
 
 
 def __getattr__(name: str):
-    """Lazily expose the higher layers so ``import livecore`` stays cheap.
-
-    Phase 5 pulls in optional heavy machinery (sqlite, config loading); keeping
-    these behind a lazy attribute means ``from livecore import BiliLiveClient``
-    never pays for them.
-    """
+    """Lazily expose higher layers so importing the core stays cheap."""
     _LAZY = {
         "LiveEngine": "engine",
         "EventDispatcher": "dispatcher",
@@ -25,13 +20,15 @@ def __getattr__(name: str):
         "ReconnectWatch": "alert",
         "SqliteStore": "store",
         "RoomSupervisor": "multi",
+        "ConnectionSupervisor": "supervisor",
+        "MultiRoomSupervisor": "supervisor",
+        "ConnectionHealth": "supervisor",
         "fetch_danmu_endpoint": "bili_http",
     }
     module = _LAZY.get(name)
     if module is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     from importlib import import_module
-
     value = getattr(import_module(f".{module}", __name__), name)
     globals()[name] = value
     return value
