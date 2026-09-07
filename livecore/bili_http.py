@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 import urllib.parse
@@ -17,7 +18,7 @@ DEFAULT_HOST = "broadcastlv.chat.bilibili.com"
 WBI_NAV_URL = "https://api.bilibili.com/x/web-interface/nav"
 GET_DANMU_INFO_URL = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo"
 ROOM_INFO_URL = "https://api.live.bilibili.com/room/v1/Room/get_info"
-WBI_CACHE_TTL_SEC = 6 * 60 * 60
+WBI_CACHE_TTL_SEC = 2 * 60 * 60
 MIXIN_KEY_ENC_TAB = (
     46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
     27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
@@ -30,8 +31,6 @@ MIXIN_KEY_ENC_TAB = (
 class HttpConfig:
     total_timeout_sec: float = 10.0
     connect_timeout_sec: float = 5.0
-    # Guest mode is valid when Bilibili returns an empty token. Set this to
-    # True when the caller explicitly requires authenticated access.
     require_token: bool = False
 
 
@@ -61,51 +60,105 @@ def _require_data(payload: object, endpoint: str) -> dict:
 def _extract_wbi_key(url: object, field: str) -> str:
     if not isinstance(url, str) or not url:
         raise BiliHttpError(f"nav: missing wbi_img.{field}")
+    # Same extraction strategy as biliup: final path component, then filename.
     name = url.rsplit("/", 1)[-1]
     return name.rsplit(".", 1)[0]
 
 
 def _mixin_key(img_key: str, sub_key: str) -> str:
-    original = img_key + sub_key
-    if len(original) < max(MIXIN_KEY_ENC_TAB) + 1:
+    original = list(img_key + sub_key)
+    required = max(MIXIN_KEY_ENC_TAB) + 1
+    if len(original) < required:
         raise BiliHttpError("nav: invalid WBI key length")
-    return "".join(original[index] for index in MIXIN_KEY_ENC_TAB)[:32]
+    # Keep this byte-for-byte equivalent to biliup's WbiSigner::create_mixin_key.
+    return "".join(original[index] for index in MIXIN_KEY_ENC_TAB[:32])
 
 
 def _sign_wbi(params: dict[str, object], keys: _WbiKeys, now: int | None = None) -> dict[str, str]:
+    """Sign parameters using the same serialization algorithm as biliup.
+
+    Important details:
+    - add integer Unix seconds as ``wts``;
+    - sort parameters lexicographically;
+    - remove ``!'()*`` from values before encoding;
+    - use percent encoding for the exact query used by MD5;
+    - append the 32-char mixin key before hashing to produce ``w_rid``.
+    """
     signed = {key: str(value) for key, value in params.items()}
     signed["wts"] = str(int(time.time()) if now is None else now)
     signed = dict(sorted(signed.items()))
-    signed = {
+    sanitized = {
         key: "".join(char for char in value if char not in "!'()*")
         for key, value in signed.items()
     }
-    query = urllib.parse.urlencode(signed, quote_via=urllib.parse.quote, safe="")
-    signed["w_rid"] = hashlib.md5((query + _mixin_key(keys.img_key, keys.sub_key)).encode()).hexdigest()
+    query = urllib.parse.urlencode(
+        sanitized,
+        doseq=False,
+        quote_via=urllib.parse.quote,
+        safe="",
+    )
+    mixin_key = _mixin_key(keys.img_key, keys.sub_key)
+    signed["w_rid"] = hashlib.md5((query + mixin_key).encode("utf-8")).hexdigest()
     return signed
 
 
-async def _get_wbi_keys(session) -> _WbiKeys:
-    async with session.get(WBI_NAV_URL) as resp:
-        resp.raise_for_status()
-        data = _require_data(await resp.json(), "nav")
-    wbi_img = data.get("wbi_img")
-    if not isinstance(wbi_img, dict):
-        raise BiliHttpError("nav: missing wbi_img")
-    return _WbiKeys(
-        img_key=_extract_wbi_key(wbi_img.get("img_url"), "img_url"),
-        sub_key=_extract_wbi_key(wbi_img.get("sub_url"), "sub_url"),
-        fetched_at=time.monotonic(),
+class _WbiSigner:
+    """Process-local WBI key cache following biliup's 2-hour strategy."""
+
+    def __init__(self) -> None:
+        self._keys: _WbiKeys | None = None
+        self._lock = asyncio.Lock()
+
+    async def get_keys(self, session, *, force_refresh: bool = False) -> _WbiKeys:
+        now = time.monotonic()
+        if not force_refresh and self._keys is not None:
+            if now - self._keys.fetched_at < WBI_CACHE_TTL_SEC:
+                return self._keys
+
+        async with self._lock:
+            now = time.monotonic()
+            if not force_refresh and self._keys is not None:
+                if now - self._keys.fetched_at < WBI_CACHE_TTL_SEC:
+                    return self._keys
+
+            async with session.get(WBI_NAV_URL) as resp:
+                resp.raise_for_status()
+                data = _require_data(await resp.json(), "nav")
+            wbi_img = data.get("wbi_img")
+            if not isinstance(wbi_img, dict):
+                raise BiliHttpError("nav: missing wbi_img")
+            self._keys = _WbiKeys(
+                img_key=_extract_wbi_key(wbi_img.get("img_url"), "img_url"),
+                sub_key=_extract_wbi_key(wbi_img.get("sub_url"), "sub_url"),
+                fetched_at=time.monotonic(),
+            )
+            return self._keys
+
+    def invalidate(self) -> None:
+        self._keys = None
+
+
+_WBI_SIGNER = _WbiSigner()
+
+
+async def _get_danmu_info(session, room_id: int, keys: _WbiKeys):
+    signed = _sign_wbi({"id": room_id, "type": 0}, keys)
+    # Construct the URL from the exact signed query rather than relying on a
+    # second serializer for the request. This guarantees that the bytes used
+    # for transport match the bytes used for the WBI MD5 calculation.
+    query = urllib.parse.urlencode(
+        signed,
+        doseq=False,
+        quote_via=urllib.parse.quote,
+        safe="",
     )
+    async with session.get(f"{GET_DANMU_INFO_URL}?{query}") as resp:
+        resp.raise_for_status()
+        return await resp.json()
 
 
 async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None) -> DanmuEndpoint:
-    """Resolve a numeric room id into a usable danmaku WebSocket endpoint.
-
-    Bilibili now requires WBI-signed parameters for ``getDanmuInfo``. The
-    signing keys are fetched from the public navigation endpoint and cached
-    for a short period. Empty tokens remain valid for guest mode.
-    """
+    """Resolve a numeric room id into a usable danmaku WebSocket endpoint."""
     if room_id <= 0:
         raise ValueError("room_id must be positive")
 
@@ -113,14 +166,24 @@ async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None
 
     cfg = config or HttpConfig()
     timeout = aiohttp.ClientTimeout(total=cfg.total_timeout_sec, connect=cfg.connect_timeout_sec)
-    headers = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
+    headers = {
+        "User-Agent": UA,
+        "Referer": "https://www.bilibili.com/",
+        "Origin": "https://www.bilibili.com",
+    }
 
     async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
-        keys = await _get_wbi_keys(session)
-        params = _sign_wbi({"id": room_id, "type": 0}, keys)
-        async with session.get(GET_DANMU_INFO_URL, params=params) as resp:
-            resp.raise_for_status()
-            data = _require_data(await resp.json(), "getDanmuInfo")
+        keys = await _WBI_SIGNER.get_keys(session)
+        payload = await _get_danmu_info(session, room_id, keys)
+
+        # WBI keys can rotate independently of the local cache. Match biliup's
+        # refreshable signer behavior by invalidating and retrying once on -352.
+        if isinstance(payload, dict) and payload.get("code") == -352:
+            _WBI_SIGNER.invalidate()
+            keys = await _WBI_SIGNER.get_keys(session, force_refresh=True)
+            payload = await _get_danmu_info(session, room_id, keys)
+
+        data = _require_data(payload, "getDanmuInfo")
 
         token = str(data.get("token") or "")
         if cfg.require_token and not token:
@@ -130,8 +193,6 @@ async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None
         usable = [h for h in hosts if isinstance(h, dict) and h.get("host")] if isinstance(hosts, list) else []
         host = usable[0] if usable else {"host": DEFAULT_HOST, "wss_port": 443}
 
-        # Short-room resolution is useful but must not make a valid handshake
-        # fail because the metadata endpoint is transient.
         real_id = room_id
         try:
             async with session.get(ROOM_INFO_URL, params={"room_id": room_id}) as resp:
