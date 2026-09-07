@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from livecore.bili_http import BiliHttpError, HttpConfig, fetch_danmu_endpoint
+from livecore.bili_http import BiliHttpError, HttpConfig, _WbiKeys, _sign_wbi, fetch_danmu_endpoint
 from livecore.types import DanmuEndpoint
 
 
@@ -45,9 +45,34 @@ class _FakeSession:
         return _FakeResp(self._responses[len(self.calls) - 1])
 
 
+def test_sign_wbi_matches_reference_algorithm():
+    keys = _WbiKeys(
+        img_key="653657f524a547ac981ded72ea172057",
+        sub_key="6e4909c702f846728e64f6007736a338",
+        fetched_at=0,
+    )
+    signed = _sign_wbi({"foo": "114", "bar": "514", "baz": 1919810}, keys, now=1702204169)
+    assert signed == {
+        "bar": "514",
+        "baz": "1919810",
+        "foo": "114",
+        "wts": "1702204169",
+        "w_rid": "d3cbd2a2316089117134038bf4caf442",
+    }
+
+
 @pytest.mark.asyncio
-async def test_fetch_danmu_endpoint_parses_response(monkeypatch):
+async def test_fetch_danmu_endpoint_parses_response_and_signs_request(monkeypatch):
     fake_session = _FakeSession([
+        {
+            "code": 0,
+            "data": {
+                "wbi_img": {
+                    "img_url": "https://i0.hdslb.com/bfs/wbi/653657f524a547ac981ded72ea172057.png",
+                    "sub_url": "https://i0.hdslb.com/bfs/wbi/6e4909c702f846728e64f6007736a338.png",
+                }
+            },
+        },
         {"code": 0, "data": {"host_list": [{"host": "danmu.example", "wss_port": 2245}], "token": "abcd"}},
         {"code": 0, "data": {"room_id": 12345}},
     ])
@@ -58,12 +83,25 @@ async def test_fetch_danmu_endpoint_parses_response(monkeypatch):
     assert ep.wss_port == 2245
     assert ep.token == "abcd"
     assert ep.room_id == 12345
-    assert fake_session.calls[0][1]["params"] == {"id": 12345, "type": 0}
+    params = fake_session.calls[1][1]["params"]
+    assert params["id"] == "12345"
+    assert params["type"] == "0"
+    assert "wts" in params
+    assert len(params["w_rid"]) == 32
 
 
 @pytest.mark.asyncio
 async def test_fetch_danmu_endpoint_accepts_empty_token_for_guest(monkeypatch):
     fake_session = _FakeSession([
+        {
+            "code": 0,
+            "data": {
+                "wbi_img": {
+                    "img_url": "https://i0.hdslb.com/bfs/wbi/653657f524a547ac981ded72ea172057.png",
+                    "sub_url": "https://i0.hdslb.com/bfs/wbi/6e4909c702f846728e64f6007736a338.png",
+                }
+            },
+        },
         {"code": 0, "data": {"host_list": [], "token": ""}},
         {"code": 0, "data": {}},
     ])
@@ -76,6 +114,15 @@ async def test_fetch_danmu_endpoint_accepts_empty_token_for_guest(monkeypatch):
 @pytest.mark.asyncio
 async def test_fetch_danmu_endpoint_requires_token_when_authenticated(monkeypatch):
     fake_session = _FakeSession([
+        {
+            "code": 0,
+            "data": {
+                "wbi_img": {
+                    "img_url": "https://i0.hdslb.com/bfs/wbi/653657f524a547ac981ded72ea172057.png",
+                    "sub_url": "https://i0.hdslb.com/bfs/wbi/6e4909c702f846728e64f6007736a338.png",
+                }
+            },
+        },
         {"code": 0, "data": {"host_list": [], "token": ""}},
     ])
     monkeypatch.setattr("aiohttp.ClientSession", lambda *a, **kw: fake_session)
@@ -86,6 +133,15 @@ async def test_fetch_danmu_endpoint_requires_token_when_authenticated(monkeypatc
 @pytest.mark.asyncio
 async def test_fetch_danmu_endpoint_falls_back_to_default_host(monkeypatch):
     fake_session = _FakeSession([
+        {
+            "code": 0,
+            "data": {
+                "wbi_img": {
+                    "img_url": "https://i0.hdslb.com/bfs/wbi/653657f524a547ac981ded72ea172057.png",
+                    "sub_url": "https://i0.hdslb.com/bfs/wbi/6e4909c702f846728e64f6007736a338.png",
+                }
+            },
+        },
         {"code": 0, "data": {"token": "abcd"}},
         {"code": 0, "data": {}},
     ])
@@ -98,9 +154,20 @@ async def test_fetch_danmu_endpoint_falls_back_to_default_host(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_fetch_danmu_endpoint_rejects_api_error(monkeypatch):
-    fake_session = _FakeSession([{"code": -400, "message": "bad room", "data": None}])
+    fake_session = _FakeSession([
+        {
+            "code": 0,
+            "data": {
+                "wbi_img": {
+                    "img_url": "https://i0.hdslb.com/bfs/wbi/653657f524a547ac981ded72ea172057.png",
+                    "sub_url": "https://i0.hdslb.com/bfs/wbi/6e4909c702f846728e64f6007736a338.png",
+                }
+            },
+        },
+        {"code": -352, "message": "-352", "data": None},
+    ])
     monkeypatch.setattr("aiohttp.ClientSession", lambda *a, **kw: fake_session)
-    with pytest.raises(BiliHttpError, match="api code=-400"):
+    with pytest.raises(BiliHttpError, match="api code=-352"):
         await fetch_danmu_endpoint(1)
 
 
