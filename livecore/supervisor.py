@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import monotonic
 
 from .bili_http import HttpConfig, fetch_danmu_endpoint
 from .client import BiliLiveClient, State
 from .logger import RingLogger
+from .types import LiveEvent
+
+
+EventHandler = Callable[[LiveEvent], Awaitable[None] | None]
+StateHandler = Callable[[State], Awaitable[None] | None]
 
 
 @dataclass(slots=True)
@@ -35,7 +41,18 @@ class ConnectionSupervisor:
         self.http_config = http_config or HttpConfig()
         self.client = BiliLiveClient(log)
         self.health = ConnectionHealth(room_id=room_id)
-        self.client.on_state(self._on_state)
+        self._event_handler: EventHandler | None = None
+        self._state_handler: StateHandler | None = None
+        self.client.on_event(self._emit_event)
+        self.client.on_state(self._emit_state)
+
+    def on_event(self, fn: EventHandler) -> None:
+        """Register an observer for parsed LiveEvent values."""
+        self._event_handler = fn
+
+    def on_state(self, fn: StateHandler) -> None:
+        """Register an observer for connection state changes."""
+        self._state_handler = fn
 
     async def start(self) -> None:
         endpoint = await fetch_danmu_endpoint(self.room_id, config=self.http_config)
@@ -44,13 +61,23 @@ class ConnectionSupervisor:
     async def stop(self) -> None:
         await self.client.stop()
 
-    async def _on_state(self, state: State) -> None:
+    async def _emit_event(self, event: LiveEvent) -> None:
+        if self._event_handler:
+            result = self._event_handler(event)
+            if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+                await result
+
+    async def _emit_state(self, state: State) -> None:
         previous = self.health.state
         self.health.state = state
         if state == "live":
             self.health.last_live_at = monotonic()
         elif state == "reconnecting" and previous != "reconnecting":
             self.health.reconnects += 1
+        if self._state_handler:
+            result = self._state_handler(state)
+            if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+                await result
 
     def snapshot(self) -> ConnectionHealth:
         return ConnectionHealth(
@@ -74,7 +101,11 @@ class MultiRoomSupervisor:
             return self.rooms[room_id]
         supervisor = ConnectionSupervisor(room_id, self.log, http_config=http_config)
         self.rooms[room_id] = supervisor
-        await supervisor.start()
+        try:
+            await supervisor.start()
+        except Exception:
+            self.rooms.pop(room_id, None)
+            raise
         return supervisor
 
     async def remove(self, room_id: int) -> None:
