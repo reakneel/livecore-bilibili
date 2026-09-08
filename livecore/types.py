@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 EventKind = Literal[
     "danmaku", "gift", "enter", "follow", "share", "guard", "superchat",
@@ -39,6 +39,9 @@ class LiveEvent:
     sentiment: Sentiment | None = None
     raw_cmd: str = ""
     popularity: int = 0
+    # Normalized command-specific fields live here without forcing every
+    # Bilibili protocol revision into the public dataclass shape.
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -75,7 +78,6 @@ class EngineConfig:
     typing_ms_per_char: int = 45
     typing_min_sec: float = 0.6
     typing_max_sec: float = 3.5
-    # Outbound-like viewer actions are opt-in for production safety.
     watch_actions: bool = False
     like_every_sec: float = 150
     share_every_sec: float = 900
