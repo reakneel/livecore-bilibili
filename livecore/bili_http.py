@@ -57,6 +57,24 @@ def _require_data(payload: object, endpoint: str) -> dict:
     return data
 
 
+def _require_nav_data(payload: object) -> dict:
+    """Return nav data for both logged-in and anonymous callers.
+
+    Bilibili deliberately returns ``code=-101`` for an anonymous nav request,
+    but still includes ``data.wbi_img``. Those public WBI keys are required for
+    signing getDanmuInfo and must not be discarded as an authentication error.
+    """
+    if not isinstance(payload, dict):
+        raise BiliHttpError("nav: response is not an object")
+    code = payload.get("code")
+    if code not in (0, -101):
+        raise BiliHttpError(f"nav: api code={code}, message={payload.get('message', '')}")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise BiliHttpError("nav: missing data")
+    return data
+
+
 def _extract_wbi_key(url: object, field: str) -> str:
     if not isinstance(url, str) or not url:
         raise BiliHttpError(f"nav: missing wbi_img.{field}")
@@ -123,7 +141,7 @@ class _WbiSigner:
 
             async with session.get(WBI_NAV_URL) as resp:
                 resp.raise_for_status()
-                data = _require_data(await resp.json(), "nav")
+                data = _require_nav_data(await resp.json())
             wbi_img = data.get("wbi_img")
             if not isinstance(wbi_img, dict):
                 raise BiliHttpError("nav: missing wbi_img")
@@ -165,7 +183,7 @@ async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None
     import aiohttp
 
     cfg = config or HttpConfig()
-    timeout = aiohttp.ClientTimeout(total=cfg.total_timeout_sec, connect=cfg.connect_timeout_sec)
+    timeout = aiohttp.ClientTimeout(total=cfg.total_timeout_sec, connect_timeout=cfg.connect_timeout_sec)
     headers = {
         "User-Agent": UA,
         "Referer": "https://www.bilibili.com/",
