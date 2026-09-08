@@ -58,12 +58,7 @@ def _require_data(payload: object, endpoint: str) -> dict:
 
 
 def _require_nav_data(payload: object) -> dict:
-    """Return nav data for both logged-in and anonymous callers.
-
-    Bilibili deliberately returns ``code=-101`` for an anonymous nav request,
-    but still includes ``data.wbi_img``. Those public WBI keys are required for
-    signing getDanmuInfo and must not be discarded as an authentication error.
-    """
+    """Return nav data for both logged-in and anonymous callers."""
     if not isinstance(payload, dict):
         raise BiliHttpError("nav: response is not an object")
     code = payload.get("code")
@@ -78,7 +73,6 @@ def _require_nav_data(payload: object) -> dict:
 def _extract_wbi_key(url: object, field: str) -> str:
     if not isinstance(url, str) or not url:
         raise BiliHttpError(f"nav: missing wbi_img.{field}")
-    # Same extraction strategy as biliup: final path component, then filename.
     name = url.rsplit("/", 1)[-1]
     return name.rsplit(".", 1)[0]
 
@@ -88,20 +82,10 @@ def _mixin_key(img_key: str, sub_key: str) -> str:
     required = max(MIXIN_KEY_ENC_TAB) + 1
     if len(original) < required:
         raise BiliHttpError("nav: invalid WBI key length")
-    # Keep this byte-for-byte equivalent to biliup's WbiSigner::create_mixin_key.
     return "".join(original[index] for index in MIXIN_KEY_ENC_TAB[:32])
 
 
 def _sign_wbi(params: dict[str, object], keys: _WbiKeys, now: int | None = None) -> dict[str, str]:
-    """Sign parameters using the same serialization algorithm as biliup.
-
-    Important details:
-    - add integer Unix seconds as ``wts``;
-    - sort parameters lexicographically;
-    - remove ``!'()*`` from values before encoding;
-    - use percent encoding for the exact query used by MD5;
-    - append the 32-char mixin key before hashing to produce ``w_rid``.
-    """
     signed = {key: str(value) for key, value in params.items()}
     signed["wts"] = str(int(time.time()) if now is None else now)
     signed = dict(sorted(signed.items()))
@@ -121,24 +105,18 @@ def _sign_wbi(params: dict[str, object], keys: _WbiKeys, now: int | None = None)
 
 
 class _WbiSigner:
-    """Process-local WBI key cache following biliup's 2-hour strategy."""
-
     def __init__(self) -> None:
         self._keys: _WbiKeys | None = None
         self._lock = asyncio.Lock()
 
     async def get_keys(self, session, *, force_refresh: bool = False) -> _WbiKeys:
         now = time.monotonic()
-        if not force_refresh and self._keys is not None:
-            if now - self._keys.fetched_at < WBI_CACHE_TTL_SEC:
-                return self._keys
-
+        if not force_refresh and self._keys is not None and now - self._keys.fetched_at < WBI_CACHE_TTL_SEC:
+            return self._keys
         async with self._lock:
             now = time.monotonic()
-            if not force_refresh and self._keys is not None:
-                if now - self._keys.fetched_at < WBI_CACHE_TTL_SEC:
-                    return self._keys
-
+            if not force_refresh and self._keys is not None and now - self._keys.fetched_at < WBI_CACHE_TTL_SEC:
+                return self._keys
             async with session.get(WBI_NAV_URL) as resp:
                 resp.raise_for_status()
                 data = _require_nav_data(await resp.json())
@@ -161,29 +139,21 @@ _WBI_SIGNER = _WbiSigner()
 
 async def _get_danmu_info(session, room_id: int, keys: _WbiKeys):
     signed = _sign_wbi({"id": room_id, "type": 0}, keys)
-    # Construct the URL from the exact signed query rather than relying on a
-    # second serializer for the request. This guarantees that the bytes used
-    # for transport match the bytes used for the WBI MD5 calculation.
-    query = urllib.parse.urlencode(
-        signed,
-        doseq=False,
-        quote_via=urllib.parse.quote,
-        safe="",
-    )
+    query = urllib.parse.urlencode(signed, doseq=False, quote_via=urllib.parse.quote, safe="")
     async with session.get(f"{GET_DANMU_INFO_URL}?{query}") as resp:
         resp.raise_for_status()
         return await resp.json()
 
 
 async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None) -> DanmuEndpoint:
-    """Resolve a numeric room id into a usable danmaku WebSocket endpoint."""
     if room_id <= 0:
         raise ValueError("room_id must be positive")
 
     import aiohttp
 
     cfg = config or HttpConfig()
-    timeout = aiohttp.ClientTimeout(total=cfg.total_timeout_sec, connect_timeout=cfg.connect_timeout_sec)
+    # aiohttp uses `sock_connect`, not `connect_timeout`.
+    timeout = aiohttp.ClientTimeout(total=cfg.total_timeout_sec, sock_connect=cfg.connect_timeout_sec)
     headers = {
         "User-Agent": UA,
         "Referer": "https://www.bilibili.com/",
@@ -193,16 +163,12 @@ async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None
     async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
         keys = await _WBI_SIGNER.get_keys(session)
         payload = await _get_danmu_info(session, room_id, keys)
-
-        # WBI keys can rotate independently of the local cache. Match biliup's
-        # refreshable signer behavior by invalidating and retrying once on -352.
         if isinstance(payload, dict) and payload.get("code") == -352:
             _WBI_SIGNER.invalidate()
             keys = await _WBI_SIGNER.get_keys(session, force_refresh=True)
             payload = await _get_danmu_info(session, room_id, keys)
 
         data = _require_data(payload, "getDanmuInfo")
-
         token = str(data.get("token") or "")
         if cfg.require_token and not token:
             raise BiliHttpError("getDanmuInfo: token required for authenticated mode")
