@@ -6,11 +6,12 @@
 
 ## 当前状态
 
-**M7 Finalization 已完成。** 主分支当前包含生产连接层、健康快照、多房间生命周期管理，以及 guest / authenticated 两种握手模式。
+**M7 Finalization 已完成。** 主分支当前包含生产连接层、健康快照、多房间生命周期管理、guest / authenticated 两种握手模式，以及面向 LiveCore 前端的统一事件监控投影。
 
 - WebSocket：心跳、指数退避 + jitter 重连、连接生命周期清理
 - Protocol：B 站 packet header、zlib / Brotli、嵌套 packet 展开、malformed packet 防护
-- Events：弹幕、礼物、上舰、Super Chat、人气等事件解析与分发
+- Events：弹幕、礼物、上舰、Super Chat、人气等事件解析与分发，并保留协议字段到 `meta`
+- Monitor：统一输出 `事件类型 + 用户 + 礼物 + 金额 + meta 摘要`
 - Engine：上下文 → dispatcher → rules → postprocess → suggestion queue
 - Behavior：观看行为与节奏模拟，默认不执行出站动作
 - Stability：SQLite 异步持久化、配置热更新、告警、multi-room supervision
@@ -33,53 +34,20 @@ BiliLiveClient ── WebSocket / heartbeat / reconnect
 Protocol ── packet expand / Brotli / zlib
           │
           ▼
-Parser → Dispatcher → Context / Rules
+Parser → LiveEvent → Monitor Projection
+          │                    │
+          ▼                    ▼
+Dispatcher / Engine       Vite WebSocket
           │
           ▼
-Engine → Postprocess → Suggestion Queue
-          │
-          ├── Behavior / Scheduler
-          ├── SQLite Store
-          └── Alert / Metrics
+Context / Rules / Postprocess / Suggestion Queue
 ```
 
 ## Vite 对接
 
 本仓库定位为 **Python 核心 SDK / backend connection layer**，Vite 不需要直接实现 B 站协议。
 
-推荐在 Vite 与 LiveCore 之间增加一个很薄的 HTTP + WebSocket API adapter：
-
-```python
-from livecore import MultiRoomSupervisor
-from livecore.bili_http import HttpConfig
-from livecore.logger import RingLogger
-
-log = RingLogger()
-supervisor = MultiRoomSupervisor(log)
-
-# guest mode：允许 B 站返回空 token
-await supervisor.add(123456)
-
-# authenticated mode：显式要求 token
-await supervisor.add(
-    123456,
-    http_config=HttpConfig(require_token=True),
-)
-
-# 给 dashboard / Vite 返回健康状态
-health = supervisor.health()
-```
-
-`ConnectionHealth` 提供：
-
-- `room_id`
-- `state`：`offline / connecting / live / reconnecting / error / stopping`
-- `reconnects`
-- `last_live_at`
-- `live_for_sec`
-- `last_error`（保留为健康模型字段，便于上层 API 扩展）
-
-建议 API adapter 向 Vite 暴露类似接口：
+当前 `livecore` 前端 adapter 通过 HTTP + WebSocket 消费 SDK：
 
 ```text
 GET    /api/rooms
@@ -89,7 +57,56 @@ GET    /api/rooms/:room_id/health
 WS     /api/rooms/:room_id/events
 ```
 
-这样 Vite 只负责 UI、状态管理与交互，LiveCore 负责连接、协议、事件和业务管线。
+WebSocket 的事件消息结构：
+
+```json
+{
+  "type": "event",
+  "event": {
+    "id": "evt123",
+    "ts": 1750000000.0,
+    "kind": "gift",
+    "room_id": 123456,
+    "user": {"uid": 10001, "name": "观众", "guard": 3, "medal": "粉丝牌"},
+    "gift": {"name": "小心心", "num": 3, "price": 100},
+    "meta": {"gift_id": 1, "total_coin": 300},
+    "monitor": {
+      "kind": "gift",
+      "kind_label": "礼物",
+      "user": {"uid": 10001, "name": "观众", "guard": 3, "medal": "粉丝牌"},
+      "gift": {"name": "小心心", "num": 3, "unit_price": 100},
+      "amount": {"value": 300, "currency": "gold_coin"},
+      "text": "观众 投喂 小心心 x3",
+      "meta_summary": "gift_id=1 total_coin=300",
+      "raw_cmd": "SEND_GIFT",
+      "popularity": 0
+    }
+  }
+}
+```
+
+`monitor` 是给 UI / 日志系统使用的稳定投影；`meta` 仍然保留协议相关字段，方便高级消费者继续使用。CLI 长连接示例与前端使用同一个 `monitor_event()` 投影，因此两边不会出现两套事件格式。
+
+## 长连接监控示例
+
+```bash
+python examples/run_long_connection.py 1814378608
+```
+
+典型输出：
+
+```text
+[03:12:08] [礼物/gift] user=观众 (guard=3, medal=粉丝牌) | gift=小心心 x3 | amount=300 gold_coin | meta=gift_id=1 total_coin=300
+[03:12:11] [弹幕/danmaku] user=观众 (medal=粉丝牌) | gift=- | amount=- | meta=mode=1 font_size=25 color=16777215 | text=晚上好
+```
+
+JSONL 模式可以直接交给日志采集器：
+
+```bash
+python examples/run_long_connection.py 1814378608 --json
+```
+
+`Ctrl+C` / `SIGTERM` 会进入 supervisor shutdown，等待连接、心跳与重连任务清理后再退出，不使用 `loop.stop()` 或 `os._exit()`。
 
 ## 模块地图
 
@@ -98,6 +115,7 @@ WS     /api/rooms/:room_id/events
 | `protocol.py` | B 站弹幕协议封包 / 解包、zlib / Brotli 展开、嵌套 packet | 1 / M6 |
 | `client.py` | WebSocket 连接、25s 心跳、指数退避 + 抖动重连、生命周期清理 | 1 / M6 |
 | `parser.py` | 服务器通知帧 → `LiveEvent` | 1 |
+| `monitor.py` | `LiveEvent` → UI / CLI 稳定监控投影 | M7 |
 | `dispatcher.py` | 按事件类型路由，支持通配符订阅 | 2 |
 | `context.py` | 单房间滚动上下文 + 去重窗口 | 2 |
 | `rules.py` | 关键词 / 事件规则匹配、情绪降级 | 2 |
@@ -123,7 +141,7 @@ WS     /api/rooms/:room_id/events
 
 ## 测试与兼容性
 
-CI 使用 Python 3.11、3.12、3.13 运行完整 pytest suite。M7 最终 CI 已全部通过。
+CI 使用 Python 3.11、3.12、3.13 运行完整 pytest suite。
 
 本地运行：
 
@@ -134,10 +152,10 @@ pytest -q
 
 ## 项目边界
 
-LiveCore 现在已经完成 **核心连接 SDK / 事件处理层** 的收尾。后续如果继续开发，建议不要再把 Vite UI 逻辑塞进本仓库，而是单独维护 API adapter / frontend 项目：
+LiveCore 已完成 **核心连接 SDK / 事件处理层** 的收尾。Vite UI 继续独立维护，通过 adapter 消费 `monitor` 投影即可；无需把 B 站协议逻辑塞进浏览器。
 
 1. Python API adapter：管理 room lifecycle、health、event stream
-2. Vite：消费 REST / WebSocket
+2. Vite：消费 REST / WebSocket，并直接渲染 `event.monitor`
 3. Redis / MQ：只有在需要跨进程、跨机器扩展时再引入
 4. Auth / rate limit：放在 API gateway 层，而不是污染核心协议层
 
