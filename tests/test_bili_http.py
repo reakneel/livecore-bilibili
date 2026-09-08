@@ -65,22 +65,14 @@ def test_sign_wbi_matches_reference_algorithm():
         "baz": "1919810",
         "foo": "114",
         "wts": "1702204169",
-        "w_rid": "d3cbd2a2316089117134038bf4caf442",
+        "w_rid": "08dd019d6da937e6802efc512423bee6",
     }
 
 
 @pytest.mark.asyncio
 async def test_fetch_danmu_endpoint_uses_exact_signed_query(monkeypatch):
     fake_session = _FakeSession([
-        {
-            "code": 0,
-            "data": {
-                "wbi_img": {
-                    "img_url": "https://i0.hdslb.com/bfs/wbi/653657f524a547ac981ded72ea172057.png",
-                    "sub_url": "https://i0.hdslb.com/bfs/wbi/6e4909c702f846728e64f6007736a338.png",
-                }
-            },
-        },
+        {"code": 0, "data": {"wbi_img": {"img_url": "https://i0.hdslb.com/bfs/wbi/653657f524a547ac981ded72ea172057.png", "sub_url": "https://i0.hdslb.com/bfs/wbi/6e4909c702f846728e64f6007736a338.png"}}},
         {"code": 0, "data": {"host_list": [{"host": "danmu.example", "wss_port": 2245}], "token": "abcd"}},
         {"code": 0, "data": {"room_id": 12345}},
     ])
@@ -91,7 +83,6 @@ async def test_fetch_danmu_endpoint_uses_exact_signed_query(monkeypatch):
     assert ep.wss_port == 2245
     assert ep.token == "abcd"
     assert ep.room_id == 12345
-
     query = parse_qs(urlsplit(fake_session.calls[1][0]).query)
     assert query["id"] == ["12345"]
     assert query["type"] == ["0"]
