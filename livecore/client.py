@@ -100,7 +100,7 @@ class BiliLiveClient:
         while True:
             await ws.send(proto.encode_heartbeat())
             self.log.push("debug", "net", "Ping")
-            await asyncio.sleep(25)
+            await asyncio.sleep(30)
 
     async def _handle_frame(self, room_id: int, raw: bytes) -> None:
         for pkt in proto.expand_packets(raw):
