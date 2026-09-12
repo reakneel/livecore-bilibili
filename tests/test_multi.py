@@ -54,8 +54,24 @@ async def test_start_all_isolates_room_failures():
 async def test_start_all_records_failure_in_log():
     sup = RoomSupervisor(rooms=[101], alerter=Alerter(AlertConfig(enabled=False))); engine = sup.engine_for(101)
     async def boom(_room_id): raise RuntimeError("连接失败")
-    engine.start_bilibili = boom  # type: ignore[method-assign]
+    engine.start_room = boom  # type: ignore[method-assign]
     await sup.start_all(); assert any("启动失败" in e.message for e in sup.log.snapshot())
+
+
+@pytest.mark.asyncio
+async def test_start_bilibili_stays_available_as_an_alias():
+    """The platform-neutral ``start_room`` is now the primary seam."""
+    from livecore.engine import LiveEngine
+
+    calls: list[int] = []
+
+    async def fake_start_room(room_id: int) -> None:
+        calls.append(room_id)
+
+    engine = LiveEngine()
+    engine.start_room = fake_start_room  # type: ignore[method-assign]
+    await engine.start_bilibili(4242)
+    assert calls == [4242]
 
 
 @pytest.mark.asyncio

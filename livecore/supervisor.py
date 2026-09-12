@@ -7,9 +7,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import monotonic
 
-from .bili_http import HttpConfig, fetch_danmu_endpoint
-from .client import BiliLiveClient, State
+from .bili_http import HttpConfig
+from .connection import LiveConnection, State
 from .logger import RingLogger
+from .platforms import PlatformAdapter, BilibiliAdapter, get_adapter
 from .types import LiveEvent
 
 
@@ -24,6 +25,7 @@ class ConnectionHealth:
     reconnects: int = 0
     last_live_at: float = 0.0
     last_error: str = ""
+    platform: str = ""
 
     @property
     def live_for_sec(self) -> float:
@@ -33,18 +35,38 @@ class ConnectionHealth:
 class ConnectionSupervisor:
     """Own one client lifecycle and expose a small UI/API-friendly health model."""
 
-    def __init__(self, room_id: int, log: RingLogger, *, http_config: HttpConfig | None = None) -> None:
+    def __init__(
+        self,
+        room_id: int,
+        log: RingLogger,
+        *,
+        http_config: HttpConfig | None = None,
+        platform: str | None = None,
+        adapter: PlatformAdapter | None = None,
+    ) -> None:
         if room_id <= 0:
             raise ValueError("room_id must be positive")
         self.room_id = room_id
         self.log = log
         self.http_config = http_config or HttpConfig()
-        self.client = BiliLiveClient(log)
-        self.health = ConnectionHealth(room_id=room_id)
+        self.adapter = adapter or self._resolve_adapter(platform)
+        self.client = LiveConnection(log, self.adapter)
+        self.health = ConnectionHealth(room_id=room_id, platform=self.adapter.name)
         self._event_handler: EventHandler | None = None
         self._state_handler: StateHandler | None = None
         self.client.on_event(self._emit_event)
         self.client.on_state(self._emit_state)
+
+    def _resolve_adapter(self, platform: str | None) -> PlatformAdapter:
+        # Default path builds a fresh Bilibili adapter so the caller's HTTP
+        # timeouts are honoured; an explicit platform name uses the registry.
+        if platform is None:
+            return BilibiliAdapter(http_config=self.http_config)
+        return get_adapter(platform)
+
+    @property
+    def platform(self) -> str:
+        return self.adapter.name
 
     def on_event(self, fn: EventHandler) -> None:
         """Register an observer for parsed LiveEvent values."""
@@ -55,8 +77,7 @@ class ConnectionSupervisor:
         self._state_handler = fn
 
     async def start(self) -> None:
-        endpoint = await fetch_danmu_endpoint(self.room_id, config=self.http_config)
-        await self.client.start(endpoint)
+        await self.client.start_room(self.room_id)
 
     async def stop(self) -> None:
         await self.client.stop()
@@ -86,20 +107,28 @@ class ConnectionSupervisor:
             reconnects=self.health.reconnects,
             last_live_at=self.health.last_live_at,
             last_error=self.health.last_error,
+            platform=self.health.platform,
         )
 
 
 class MultiRoomSupervisor:
     """Lightweight lifecycle manager suitable for a Vite-facing API service."""
 
-    def __init__(self, log: RingLogger) -> None:
+    def __init__(self, log: RingLogger, *, platform: str | None = None) -> None:
         self.log = log
+        self.platform = platform
         self.rooms: dict[int, ConnectionSupervisor] = {}
 
-    async def add(self, room_id: int, *, http_config: HttpConfig | None = None) -> ConnectionSupervisor:
+    async def add(self, room_id: int, *, http_config: HttpConfig | None = None,
+                  platform: str | None = None) -> ConnectionSupervisor:
         if room_id in self.rooms:
             return self.rooms[room_id]
-        supervisor = ConnectionSupervisor(room_id, self.log, http_config=http_config)
+        supervisor = ConnectionSupervisor(
+            room_id,
+            self.log,
+            http_config=http_config,
+            platform=platform if platform is not None else self.platform,
+        )
         self.rooms[room_id] = supervisor
         try:
             await supervisor.start()

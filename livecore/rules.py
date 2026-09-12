@@ -14,7 +14,7 @@ def _pick(lines: tuple[str, ...] | list[str]) -> str:
 
 
 def match_rule(ev: LiveEvent) -> tuple[str, str] | None:
-    if ev.kind in {"enter", "like", "popularity", "system"}:
+    if ev.kind in {"enter", "like", "popularity", "system", "online_rank"}:
         return None
     if ev.sentiment == "negative":
         return _pick(("主播辛苦了", "慢慢来就好", "今晚听个响")), "负向情绪降级"

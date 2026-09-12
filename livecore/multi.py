@@ -19,8 +19,10 @@ class RoomSupervisor:
     """Owns one isolated engine and reconnect watcher per room."""
 
     def __init__(self, rooms: Iterable[int] = (), config: EngineConfig | None = None, store: SqliteStore | None = None,
-                 alerter: Alerter | None = None, log: RingLogger | None = None) -> None:
+                 alerter: Alerter | None = None, log: RingLogger | None = None,
+                 platform: str | None = None) -> None:
         self.config = config or EngineConfig(); self.log = log or RingLogger(); self.store = store
+        self.platform = platform
         self.alerter = alerter or Alerter(AlertConfig(), log=self.log)
         self._watches: dict[int, ReconnectWatch] = {}; self._engines: dict[int, LiveEngine] = {}
         self._reload_tasks: set[asyncio.Task[None]] = set()
@@ -39,7 +41,8 @@ class RoomSupervisor:
 
     def add_room(self, room_id: int, config: EngineConfig | None = None) -> LiveEngine:
         if room_id in self._engines: return self._engines[room_id]
-        engine = LiveEngine(config=config or self.config); engine.client.on_state(self._state_handler(room_id))
+        engine = LiveEngine(config=config or self.config, platform=self.platform)
+        engine.client.on_state(self._state_handler(room_id))
         if self.store is not None: restore_context(self.store, room_id, engine.ctx); engine.attach_store(self.store)
         self.watch_for(room_id); self._engines[room_id] = engine; return engine
 
@@ -63,7 +66,7 @@ class RoomSupervisor:
         await asyncio.gather(*(self._start_one(room_id) for room_id in self.room_ids), return_exceptions=True)
 
     async def _start_one(self, room_id: int) -> None:
-        try: await self._engines[room_id].start_bilibili(room_id)
+        try: await self._engines[room_id].start_room(room_id)
         except Exception as exc:
             self.log.push("error", "net", f"房间 {room_id} 启动失败：{exc}")
             await self.watch_for(room_id).record_failure(f"房间 {room_id} 启动失败：{exc}")

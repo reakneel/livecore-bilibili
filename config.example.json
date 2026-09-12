@@ -38,5 +38,13 @@
 
   "ai": {
     "provider": "none"
+  },
+
+  "protobuf": {
+    "_comment": "B站把 INTERACT_WORD_V2 / SEND_GIFT_V2 / ONLINE_RANK_V3 的正文换成了 data.pb（base64 protobuf）。字段号存放在 livecore/schemas/bilibili.pb.json，可热更新：改文件即生效，无需重启或重连。这里可以做覆盖，不必改包内文件。",
+    "schema_path": "",
+    "overlay_path": "",
+    "poll_sec": 2.0,
+    "commands": {}
   }
 }

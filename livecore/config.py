@@ -38,6 +38,15 @@ DEFAULT_CONFIG: dict = {
         "retention_days": 7,
     },
     "ai": {"provider": "none"},
+    "protobuf": {
+        # Hot-reloadable protobuf field map for the *_V2 commands. Leave the
+        # paths empty to use the schema shipped in livecore/schemas/; override
+        # single fields with "commands" instead of editing the package.
+        "schema_path": "",
+        "overlay_path": "",
+        "poll_sec": 2.0,
+        "commands": {},
+    },
 }
 
 
@@ -185,4 +194,9 @@ class ConfigStore:
 
     def ai_settings(self) -> dict:
         value = self._snapshot.get("ai") or {}
+        return dict(value) if isinstance(value, dict) else {}
+
+    def protobuf_settings(self) -> dict:
+        """The ``protobuf`` section: hot-reloadable protobuf field map overrides."""
+        value = self._snapshot.get("protobuf") or {}
         return dict(value) if isinstance(value, dict) else {}

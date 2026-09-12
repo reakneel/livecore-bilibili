@@ -7,11 +7,11 @@ from collections.abc import Callable
 
 from .adapters import AiAdapter, NoopAiAdapter, OutboundAdapter, SimulatorAdapter
 from .behavior import WatchSimulator
-from .bili_http import fetch_danmu_endpoint
-from .client import BiliLiveClient
+from .connection import LiveConnection
 from .context import RoomContext
 from .dispatcher import EventDispatcher
 from .logger import RingLogger
+from .platforms import PlatformAdapter, get_adapter
 from .postprocess import postprocess_reply
 from .rules import match_rule
 from .scheduler import BehaviorScheduler
@@ -24,6 +24,9 @@ class LiveEngine:
         config: EngineConfig | None = None,
         outbound: OutboundAdapter | None = None,
         ai: AiAdapter | None = None,
+        *,
+        platform: str | None = None,
+        adapter: PlatformAdapter | None = None,
     ) -> None:
         self.config = config or EngineConfig()
         self.outbound = outbound or SimulatorAdapter()
@@ -33,7 +36,8 @@ class LiveEngine:
         self.scheduler = BehaviorScheduler()
         self.watch = WatchSimulator()
         self.dispatcher = EventDispatcher()
-        self.client = BiliLiveClient(self.log)
+        self.adapter = adapter or get_adapter(platform)
+        self.client = LiveConnection(self.log, self.adapter)
         self.suggestions: list[Suggestion] = []
         self.room_id = 0
         self._event_handlers: list[Callable[[LiveEvent], None]] = []
@@ -51,15 +55,23 @@ class LiveEngine:
     def on_event(self, fn: Callable[[LiveEvent], None]) -> None:
         self._event_handlers.append(fn)
 
-    async def start_bilibili(self, room_id: int) -> None:
+    async def start_room(self, room_id: int) -> None:
+        """Resolve the room through the platform adapter and open the connection."""
         self._running = True
         self.room_id = room_id
         self.scheduler.reset(self.config)
         self.watch.reset()
-        endpoint = await fetch_danmu_endpoint(room_id)
-        self.log.push("info", "net", f"弹幕服务器 {endpoint.host} 房间 {endpoint.room_id}")
-        await self.client.start(endpoint)
+        endpoint = await self.client.start_room(room_id)
+        self.log.push(
+            "info",
+            "net",
+            f"{self.adapter.display_name} 长连接 {endpoint.host}:{endpoint.port} 房间 {endpoint.room_id}",
+        )
         self._sched_task = asyncio.create_task(self._scheduler_loop())
+
+    async def start_bilibili(self, room_id: int) -> None:
+        """Backwards-compatible alias for :meth:`start_room`."""
+        await self.start_room(room_id)
 
     async def stop(self) -> None:
         self._running = False

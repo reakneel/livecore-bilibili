@@ -50,6 +50,7 @@ def monitor_event(event: LiveEvent) -> dict[str, Any]:
             "danmaku": "弹幕", "gift": "礼物", "enter": "进场", "follow": "关注",
             "share": "分享", "guard": "大航海", "superchat": "醒目留言",
             "like": "点赞", "system": "系统", "popularity": "人气",
+            "online_rank": "高能榜",
         }.get(event.kind, event.kind),
         "user": user,
         "gift": gift,

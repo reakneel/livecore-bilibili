@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "platform": "bilibili",
+  "_comment": [
+    "Bilibili protobuf field numbers for live commands whose payload moved into",
+    "data.pb (Base64 protobuf). This file is the single source of truth: edit it,",
+    "save it, and a running connection picks the change up within poll_sec —",
+    "no restart, no reconnect and no code change.",
+    "",
+    "value forms: 9  -> message field 9",
+    "             \"9.3\" -> nested message(9).field(3)",
+    "Override single fields without editing the package via an overlay file",
+    "(LIVECORE_SCHEMA_PATH) or the 'protobuf' section of config.json.",
+    "",
+    "Sources: bilibili-API-collect docs/live/message_stream.md (INTERACT_WORD_V2,",
+    "ONLINE_RANK_V3) cross-checked against live traffic captures.",
+    "Field numbers verified against real packets on 2026-09-13."
+  ],
+  "commands": {
+    "INTERACT_WORD_V2": {
+      "source": "pb",
+      "note": "enter(1)/follow(2)/share(3); replaced INTERACT_WORD. json data keeps only dmscore. Field 8 is a millisecond timestamp (verified: 8 == 7*1000 on every live sample), not a score.",
+      "ignore": [12, 19, 24],
+      "fields": {
+        "uid": 1,
+        "uname": 2,
+        "uname_color": 3,
+        "identities": 4,
+        "msg_type": 5,
+        "roomid": 6,
+        "timestamp": 7,
+        "timestamp_ms": 8,
+        "medal": 9,
+        "medal_anchor_uid": "9.1",
+        "medal_level": "9.2",
+        "medal_name": "9.3",
+        "medal_color": "9.4",
+        "medal_color_start": "9.5",
+        "medal_color_end": "9.6",
+        "medal_color_border": "9.7",
+        "medal_is_lighted": "9.8",
+        "medal_anchor_roomid": "9.12",
+        "timestamp_ns": 15,
+        "uinfo": 22,
+        "uinfo_uid": "22.1",
+        "uinfo_base": "22.2",
+        "uinfo_name": "22.2.1",
+        "uinfo_face": "22.2.2",
+        "uinfo_medal": "22.3",
+        "uinfo_medal_name": "22.3.1",
+        "uinfo_medal_level": "22.3.2",
+        "relation": 23,
+        "relation_icon": "23.1",
+        "relation_text": "23.2",
+        "relation_type": "23.3"
+      }
+    },
+
+    "SEND_GIFT_V2": {
+      "source": "pb",
+      "note": "protobuf sibling of SEND_GIFT; the gift itself is the nested message at field 10. Only observable on authenticated (cookie) connections - guest sessions are throttled and rarely receive gift frames.",
+      "ignore": [1, 11, 13, 15],
+      "fields": {
+        "uname": 2,
+        "face": 3,
+        "medal": 8,
+        "gift": 10,
+        "gift_id": "10.1",
+        "gift_name": "10.2",
+        "num": "10.3",
+        "price": "10.5",
+        "discount_price": "10.6",
+        "coin_type": "10.8",
+        "batch_combo_id": "10.9",
+        "gift_timestamp": "10.10",
+        "combo_id": "10.12"
+      }
+    },
+
+    "ONLINE_RANK_V3": {
+      "source": "pb",
+      "note": "high-energy audience board; replaced ONLINE_RANK_V2. json data keeps only pb.",
+      "fields": {
+        "rank_type": 1,
+        "list": 3
+      },
+      "lists": {
+        "list": {
+          "uid": 1,
+          "face": 2,
+          "score": 3,
+          "uname": 4,
+          "rank": 5,
+          "guard_level": 6,
+          "uinfo": 8,
+          "uinfo_uid": "8.1",
+          "uinfo_name": "8.2.1",
+          "uinfo_face": "8.2.2",
+          "guard_end_time": "8.6.2",
+          "wealth_level": "8.7.1"
+        }
+      }
+    }
+  }
+}

@@ -70,9 +70,15 @@ async def diagnose(room_id: int, duration: float) -> int:
         await client.stop()
 
     live_seen = connected_at is not None
+    # A healthy room should hold one connection. Repeated reconnects with a fixed
+    # period usually mean the transport keepalive is misconfigured (see README:
+    # "连接稳定性：协议层 keepalive 必须关闭").
+    reconnects = max(0, states.count("reconnecting") - 1)
+    errors = states.count("error")
     print("[3/6] auth: " + ("OK" if live_seen else "NOT CONFIRMED"))
     print("[4/6] heartbeat: " + ("client task active during run" if live_seen else "NOT CONFIRMED"))
-    print("[5/6] events:")
+    print(f"[5/6] stability: reconnects={reconnects} errors={errors} duration={duration:.1f}s")
+    print("[6/6] events:")
     if events:
         for kind, count in sorted(events.items()):
             print(f"    {kind:<12} {count}")
@@ -82,6 +88,9 @@ async def diagnose(room_id: int, duration: float) -> int:
     print(f"duration={duration:.1f}s")
 
     if live_seen:
+        if reconnects or errors:
+            print(f"diagnosis=websocket_live_but_unstable (reconnects={reconnects}, errors={errors})")
+            return 2
         print("diagnosis=websocket_live_ok")
         return 0
     print("diagnosis=websocket_auth_not_confirmed")

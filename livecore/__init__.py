@@ -1,9 +1,41 @@
-"""LiveCore: modular Bilibili live-room intelligence framework."""
+"""LiveCore: modular live-room intelligence framework.
+
+The core is platform agnostic: :class:`~livecore.connection.LiveConnection`
+speaks to whatever platform adapter it is given, and ``bilibili`` is registered
+as the default adapter so existing Bilibili code keeps working unchanged.
+"""
 
 from .client import BiliLiveClient
+from .connection import LiveConnection
+from .platforms import (
+    BilibiliAdapter,
+    FrameKind,
+    InboundFrame,
+    LiveEndpoint,
+    PlatformAdapter,
+    available_platforms,
+    default_platform,
+    get_adapter,
+    register_adapter,
+)
 from .types import DanmuEndpoint, EngineConfig, LiveEvent
 
-__all__ = ["BiliLiveClient", "LiveEvent", "EngineConfig", "DanmuEndpoint"]
+__all__ = [
+    "BiliLiveClient",
+    "BilibiliAdapter",
+    "DanmuEndpoint",
+    "EngineConfig",
+    "FrameKind",
+    "InboundFrame",
+    "LiveConnection",
+    "LiveEndpoint",
+    "LiveEvent",
+    "PlatformAdapter",
+    "available_platforms",
+    "default_platform",
+    "get_adapter",
+    "register_adapter",
+]
 __version__ = "0.1.0"
 
 
@@ -24,6 +56,14 @@ def __getattr__(name: str):
         "MultiRoomSupervisor": "supervisor",
         "ConnectionHealth": "supervisor",
         "fetch_danmu_endpoint": "bili_http",
+        "monitor_event": "monitor",
+        "SchemaStore": "schema",
+        "CommandSchema": "schema",
+        "FieldReader": "schema",
+        "FieldPath": "schema",
+        "schema_for": "schema",
+        "default_schema_path": "schema",
+        "store_from_settings": "schema",
     }
     module = _LAZY.get(name)
     if module is None:

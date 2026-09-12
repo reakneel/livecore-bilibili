@@ -16,6 +16,7 @@ UA = (
 )
 DEFAULT_HOST = "broadcastlv.chat.bilibili.com"
 WBI_NAV_URL = "https://api.bilibili.com/x/web-interface/nav"
+BUVID_SPI_URL = "https://api.bilibili.com/x/frontend/finger/spi"
 GET_DANMU_INFO_URL = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo"
 ROOM_INFO_URL = "https://api.live.bilibili.com/room/v1/Room/get_info"
 WBI_CACHE_TTL_SEC = 2 * 60 * 60
@@ -143,6 +144,31 @@ async def _get_danmu_info(session, room_id: int, keys: _WbiKeys):
     async with session.get(f"{GET_DANMU_INFO_URL}?{query}") as resp:
         resp.raise_for_status()
         return await resp.json()
+
+
+async def fetch_buvid3() -> str:
+    """Fetch a ``buvid3`` fingerprint value.
+
+    ``getDanmuInfo`` has expected a buvid3 cookie since 2025-06-27. Guest sessions
+    without one still work today, but the value is echoed in the auth body and
+    keeps the connection out of the risk-control bucket. This helper is not called
+    implicitly so the handshake keeps its exact request sequence; pass the result
+    to :class:`~livecore.platforms.bilibili.BilibiliAdapter` when you want it.
+    """
+    import aiohttp
+
+    headers = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
+    async with aiohttp.ClientSession(headers=headers) as session:
+        try:
+            async with session.get(BUVID_SPI_URL) as resp:
+                resp.raise_for_status()
+                payload = await resp.json()
+        except (aiohttp.ClientError, ValueError):
+            return ""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("b_3") or "")
 
 
 async def fetch_danmu_endpoint(room_id: int, *, config: HttpConfig | None = None) -> DanmuEndpoint:

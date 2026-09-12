@@ -6,6 +6,7 @@ import json
 import struct
 import zlib
 from dataclasses import dataclass
+from typing import Any
 
 try:
     import brotli
@@ -36,8 +37,26 @@ def encode_packet(op: int, body: bytes, protover: int = PROTO_INT) -> bytes:
     return HEADER.pack(HEADER_SIZE + len(body), HEADER_SIZE, protover, op, 1) + body
 
 
-def encode_auth(room_id: int, token: str, uid: int = 0) -> bytes:
-    payload = {"uid": uid, "roomid": room_id, "protover": PROTO_ZLIB, "platform": "web", "type": 2, "key": token}
+def encode_auth(
+    room_id: int,
+    token: str,
+    uid: int = 0,
+    *,
+    protover: int = PROTO_ZLIB,
+    buvid: str = "",
+) -> bytes:
+    payload: dict[str, Any] = {
+        "uid": uid,
+        "roomid": room_id,
+        "protover": protover,
+        "platform": "web",
+        "type": 2,
+        "key": token,
+    }
+    if buvid:
+        # getDanmuInfo expects a buvid3 cookie since 2025-06-27; echoing it in the
+        # auth body keeps the session out of the risk-control bucket.
+        payload["buvid"] = buvid
     return encode_packet(OP_AUTH, json.dumps(payload).encode("utf-8"), PROTO_RAW)
 
 
@@ -61,19 +80,36 @@ def decode_packets(buf: bytes) -> list[Packet]:
     return packets
 
 
-def expand_packets(buf: bytes) -> list[Packet]:
+def expand_packets(buf: bytes, *, strict: bool = True) -> list[Packet]:
+    """Flatten nested/compressed packets.
+
+    ``strict=False`` keeps whatever could be decoded instead of raising on a
+    malformed or partially received frame. The long connection uses the tolerant
+    mode so one bad frame never tears down a healthy socket.
+    """
+    if not strict:
+        try:
+            return _expand(buf)
+        except (ValueError, zlib.error, RuntimeError):
+            return []
+    return _expand(buf)
+
+
+def _expand(buf: bytes) -> list[Packet]:
     out: list[Packet] = []
     for pkt in decode_packets(buf):
         if pkt.protover == PROTO_ZLIB and pkt.body:
             try:
-                out.extend(expand_packets(zlib.decompress(pkt.body))); continue
+                out.extend(_expand(zlib.decompress(pkt.body)))
+                continue
             except zlib.error:
                 pass
         elif pkt.protover == PROTO_BROTLI and pkt.body:
             if brotli is None:
                 raise RuntimeError("Brotli support requires the 'brotli' package")
             try:
-                out.extend(expand_packets(brotli.decompress(pkt.body))); continue
+                out.extend(_expand(brotli.decompress(pkt.body)))
+                continue
             except brotli.error:
                 pass
         out.append(pkt)
@@ -81,12 +117,16 @@ def expand_packets(buf: bytes) -> list[Packet]:
 
 
 def read_popularity(body: bytes) -> int:
-    if len(body) < 4: return 0
+    if len(body) < 4:
+        return 0
     return struct.unpack(">I", body[:4])[0]
 
 
 def parse_json_body(body: bytes):
     text = body.decode("utf-8", errors="replace").strip()
-    if not text: return None
-    try: return json.loads(text)
-    except json.JSONDecodeError: return text
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text

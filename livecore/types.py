@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 EventKind = Literal[
     "danmaku", "gift", "enter", "follow", "share", "guard", "superchat",
-    "like", "system", "popularity",
+    "like", "system", "popularity", "online_rank",
 ]
 Sentiment = Literal["positive", "neutral", "negative"]
 SuggestionSource = Literal["rule", "ai", "schedule", "random"]
